@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use semver::Version;
 use serde_json::Value as JsonValue;
@@ -111,12 +111,18 @@ fn get_current_version(base_path: Option<&Path>) -> Result<Version> {
     if cargo_toml.exists() {
         let content = fs::read_to_string(&cargo_toml)?;
         let doc = content.parse::<DocumentMut>()?;
-        if let Some(v) = doc.get("package").and_then(|p| p.get("version")).and_then(|v| v.as_str()) {
+        if let Some(v) = doc
+            .get("package")
+            .and_then(|p| p.get("version"))
+            .and_then(|v| v.as_str())
+        {
             return Ok(Version::parse(v)?);
         }
     }
 
-    Err(anyhow!("Could not find version in package.json or Cargo.toml"))
+    Err(anyhow!(
+        "Could not find version in package.json or Cargo.toml"
+    ))
 }
 
 fn increment_version(v: &Version, level: &str) -> Result<Version> {
@@ -221,7 +227,12 @@ fn git_tag_version(v: &Version, message: Option<String>) -> Result<()> {
     let version_str = format!("v{}", v);
     let commit_message = message.unwrap_or_else(|| version_str.clone());
 
-    let files = ["package.json", "Cargo.toml", "package-lock.json", "Cargo.lock"];
+    let files = [
+        "package.json",
+        "Cargo.toml",
+        "package-lock.json",
+        "Cargo.lock",
+    ];
     for file in files {
         if Path::new(file).exists() {
             Command::new("git").args(["add", file]).status()?;
@@ -336,10 +347,13 @@ mod tests {
     fn test_update_cargo_toml() -> Result<()> {
         let dir = tempdir()?;
         let file_path = dir.path().join("Cargo.toml");
-        fs::write(&file_path, r#"[package]
+        fs::write(
+            &file_path,
+            r#"[package]
 name = "test"
 version = "1.0.0"
-"#)?;
+"#,
+        )?;
 
         let next_v = Version::parse("2.0.0")?;
         update_files(&next_v, Some(dir.path()))?;

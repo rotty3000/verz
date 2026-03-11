@@ -22,7 +22,7 @@ WINDOWS_AMD64 = x86_64-pc-windows-gnu
 
 TARGETS = $(LINUX_AMD64) $(LINUX_ARM64) $(WINDOWS_AMD64)
 
-.PHONY: all build clean compress copyright lint setup test $(TARGETS)
+.PHONY: all build clean compress copyright lint lint-fix setup test $(TARGETS)
 
 all: build
 
@@ -42,6 +42,10 @@ copyright:
 lint: copyright
 	cargo fmt --all -- --check
 	cargo clippy --all-targets --all-features -- -D warnings
+
+lint-fix: copyright
+	cargo fmt --all
+	cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged
 
 test:
 	cargo test

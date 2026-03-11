@@ -1,3 +1,17 @@
+// Copyright 2026 Raymond Auge <rayauge@doublebite.com>
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use semver::Version;
@@ -56,7 +70,10 @@ fn main() -> Result<()> {
             VerzCommand::Major => increment_version(&current_version, "major")?,
             VerzCommand::Minor => increment_version(&current_version, "minor")?,
             VerzCommand::Patch => increment_version(&current_version, "patch")?,
-            _ => return Err(anyhow!("Unsupported increment command")),
+            VerzCommand::Premajor => increment_version(&current_version, "premajor")?,
+            VerzCommand::Preminor => increment_version(&current_version, "preminor")?,
+            VerzCommand::Prepatch => increment_version(&current_version, "prepatch")?,
+            VerzCommand::Prerelease => increment_version(&current_version, "prerelease")?,
         }
     } else if let Some(ver_str) = cli.newversion {
         Version::parse(&ver_str).context("Invalid version string")?
@@ -117,8 +134,55 @@ fn increment_version(v: &Version, level: &str) -> Result<Version> {
             next.pre = semver::Prerelease::EMPTY;
         }
         "patch" => {
-            next.patch += 1;
+            if next.pre.is_empty() {
+                next.patch += 1;
+            }
             next.pre = semver::Prerelease::EMPTY;
+        }
+        "premajor" => {
+            next.major += 1;
+            next.minor = 0;
+            next.patch = 0;
+            next.pre = semver::Prerelease::new("0").map_err(|e| anyhow!(e))?;
+        }
+        "preminor" => {
+            next.minor += 1;
+            next.patch = 0;
+            next.pre = semver::Prerelease::new("0").map_err(|e| anyhow!(e))?;
+        }
+        "prepatch" => {
+            next.patch += 1;
+            next.pre = semver::Prerelease::new("0").map_err(|e| anyhow!(e))?;
+        }
+        "prerelease" => {
+            if next.pre.is_empty() {
+                next.patch += 1;
+                next.pre = semver::Prerelease::new("0").map_err(|e| anyhow!(e))?;
+            } else {
+                let pre_str = next.pre.as_str();
+                // Find the last numeric part
+                if let Some(pos) = pre_str.rfind(|c: char| !c.is_numeric()) {
+                    let (prefix, suffix) = pre_str.split_at(pos + 1);
+                    if let Ok(num) = suffix.parse::<u64>() {
+                        next.pre = semver::Prerelease::new(&format!("{}{}", prefix, num + 1))
+                            .map_err(|e| anyhow!(e))?;
+                    } else {
+                        // If the suffix is not a number, append .0
+                        next.pre = semver::Prerelease::new(&format!("{}.0", pre_str))
+                            .map_err(|e| anyhow!(e))?;
+                    }
+                } else {
+                    // It's all numeric
+                    if let Ok(num) = pre_str.parse::<u64>() {
+                        next.pre = semver::Prerelease::new(&(num + 1).to_string())
+                            .map_err(|e| anyhow!(e))?;
+                    } else {
+                        // Not numeric, append .0
+                        next.pre = semver::Prerelease::new(&format!("{}.0", pre_str))
+                            .map_err(|e| anyhow!(e))?;
+                    }
+                }
+            }
         }
         _ => return Err(anyhow!("Unsupported increment level")),
     }
@@ -185,6 +249,54 @@ mod tests {
         let v = Version::parse("1.2.3")?;
         let next = increment_version(&v, "patch")?;
         assert_eq!(next.to_string(), "1.2.4");
+
+        let v_pre = Version::parse("1.2.4-0")?;
+        let next_pre = increment_version(&v_pre, "patch")?;
+        assert_eq!(next_pre.to_string(), "1.2.4");
+        Ok(())
+    }
+
+    #[test]
+    fn test_increment_premajor() -> Result<()> {
+        let v = Version::parse("1.2.3")?;
+        let next = increment_version(&v, "premajor")?;
+        assert_eq!(next.to_string(), "2.0.0-0");
+        Ok(())
+    }
+
+    #[test]
+    fn test_increment_preminor() -> Result<()> {
+        let v = Version::parse("1.2.3")?;
+        let next = increment_version(&v, "preminor")?;
+        assert_eq!(next.to_string(), "1.3.0-0");
+        Ok(())
+    }
+
+    #[test]
+    fn test_increment_prepatch() -> Result<()> {
+        let v = Version::parse("1.2.3")?;
+        let next = increment_version(&v, "prepatch")?;
+        assert_eq!(next.to_string(), "1.2.4-0");
+        Ok(())
+    }
+
+    #[test]
+    fn test_increment_prerelease() -> Result<()> {
+        let v = Version::parse("1.2.3")?;
+        let next = increment_version(&v, "prerelease")?;
+        assert_eq!(next.to_string(), "1.2.4-0");
+
+        let v2 = Version::parse("1.2.4-0")?;
+        let next2 = increment_version(&v2, "prerelease")?;
+        assert_eq!(next2.to_string(), "1.2.4-1");
+
+        let v3 = Version::parse("1.2.4-alpha.0")?;
+        let next3 = increment_version(&v3, "prerelease")?;
+        assert_eq!(next3.to_string(), "1.2.4-alpha.1");
+
+        let v4 = Version::parse("1.2.4-alpha")?;
+        let next4 = increment_version(&v4, "prerelease")?;
+        assert_eq!(next4.to_string(), "1.2.4-alpha.0");
         Ok(())
     }
 

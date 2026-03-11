@@ -1,0 +1,15 @@
+[package]
+name = "verz"
+version = "1.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.5.60", features = ["derive"] }
+semver = "1.0.27"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+toml_edit = "0.25.4"
+
+[dev-dependencies]
+tempfile = "3.27.0"

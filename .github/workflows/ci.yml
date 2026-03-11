@@ -1,0 +1,134 @@
+# Copyright 2026 Raymond Auge <rayauge@doublebite.com>
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: CI/CD
+
+on:
+  push:
+    branches-ignore:
+    - "dependabot/**"
+    paths:
+    - "**"
+    - "!docs/**"
+    tags:
+    - "v*"
+  pull_request:
+    paths:
+    - "**"
+    - "!docs/**"
+
+env:
+  LC_ALL: en_US.UTF-8
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    name: Release
+    if: (github.repository == 'rotty3000/verz') && startsWith(github.ref, 'refs/tags/') && (github.event_name != 'pull_request')
+    needs: [lint, test]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Install Cross
+      run: cargo install cross --git https://github.com/cross-rs/cross
+    - name: Install UPX
+      run: sudo apt-get update && sudo apt-get install -y upx-ucl
+    - name: Update Cargo.toml version
+      run: |
+        TAG=${GITHUB_REF#refs/tags/}
+        VERSION=${TAG#v}
+        sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+    - name: Build and Compress
+      run: make compress
+    - name: Prepare Release Assets
+      run: |
+        mkdir -p release-assets
+        cp dist/x86_64-unknown-linux-musl/verz release-assets/verz-linux-amd64
+        cp dist/aarch64-unknown-linux-musl/verz release-assets/verz-linux-arm64
+        cp dist/x86_64-pc-windows-gnu/verz.exe release-assets/verz-windows-amd64.exe
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: release-assets/*
+        generate_release_notes: true
+    - name: Update Homebrew Formula
+      env:
+        HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      run: |
+        TAG=${GITHUB_REF#refs/tags/}
+        VERSION=${TAG#v}
+
+        # Source (macOS)
+        SOURCE_URL="https://github.com/rotty3000/verz/archive/refs/tags/${TAG}.tar.gz"
+        curl -L -o verz-source.tar.gz "$SOURCE_URL"
+        SOURCE_SHA=$(sha256sum verz-source.tar.gz | awk '{print $1}')
+
+        # Linux AMD64
+        AMD64_URL="https://github.com/rotty3000/verz/releases/download/${TAG}/verz-linux-amd64"
+        AMD64_SHA=$(sha256sum dist/x86_64-unknown-linux-musl/verz | awk '{print $1}')
+
+        # Linux ARM64
+        ARM64_URL="https://github.com/rotty3000/verz/releases/download/${TAG}/verz-linux-arm64"
+        ARM64_SHA=$(sha256sum dist/aarch64-unknown-linux-musl/verz | awk '{print $1}')
+
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+        git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/rotty3000/homebrew-tap.git homebrew-tap
+        cd homebrew-tap
+
+        # Update Version
+        sed -i "s|version \".*\"|version \"$VERSION\"|" Formula/verz.rb
+
+        # Update Linux AMD64
+        perl -i -0777 -pe "s|(if Hardware::CPU.intel\?.*?sha256 \").*?(\".*?url \").*?(\")|\${1}$AMD64_SHA\${2}$AMD64_URL\${3}|s" Formula/verz.rb
+
+        # Update Linux ARM64
+        perl -i -0777 -pe "s|(elsif Hardware::CPU.arm\?.*?sha256 \").*?(\".*?url \").*?(\")|\${1}$ARM64_SHA\${2}$ARM64_URL\${3}|s" Formula/verz.rb
+
+        # Update macOS/Source
+        perl -i -0777 -pe "s|(on_macos.*?sha256 \").*?(\".*?url \").*?(\")|\${1}$SOURCE_SHA\${2}$SOURCE_URL\${3}|s" Formula/verz.rb
+
+        git add Formula/verz.rb
+        git commit -m "Update verz to $TAG"
+        git push
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+    - name: Run lint
+      run: make lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Run tests
+      run: cargo test

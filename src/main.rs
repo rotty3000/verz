@@ -284,7 +284,6 @@ fn git_tag_version(v: &Version, message: Option<String>) -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,4 +452,3 @@ version = "1.0.0"
         Ok(())
     }
 }
-

@@ -87,7 +87,7 @@ fn main() -> Result<()> {
 
     update_files(&next_version, None)?;
 
-    if !cli.no_git_tag_version && is_git_repo() {
+    if !cli.no_git_tag_version && is_git_repo(None) {
         git_tag_version(&next_version, cli.message)?;
     }
 
@@ -99,6 +99,7 @@ fn main() -> Result<()> {
 fn get_current_version(base_path: Option<&Path>) -> Result<Version> {
     let pkg_json = base_path.map_or(PathBuf::from("package.json"), |p| p.join("package.json"));
     let cargo_toml = base_path.map_or(PathBuf::from("Cargo.toml"), |p| p.join("Cargo.toml"));
+    let version_file = base_path.map_or(PathBuf::from("VERSION"), |p| p.join("VERSION"));
 
     if pkg_json.exists() {
         let content = fs::read_to_string(&pkg_json)?;
@@ -120,8 +121,31 @@ fn get_current_version(base_path: Option<&Path>) -> Result<Version> {
         }
     }
 
+    if version_file.exists() {
+        let content = fs::read_to_string(&version_file)?;
+        let content = content.trim();
+        let version_str = content.strip_prefix('v').unwrap_or(content);
+        return Ok(Version::parse(version_str)?);
+    }
+
+    if is_git_repo(base_path) {
+        let mut cmd = Command::new("git");
+        cmd.args(["describe", "--tags", "--abbrev=0"]);
+        if let Some(p) = base_path {
+            cmd.current_dir(p);
+        }
+        let output = cmd.output()?;
+        if output.status.success() {
+            let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let version_str = tag.strip_prefix('v').unwrap_or(&tag);
+            if let Ok(v) = Version::parse(version_str) {
+                return Ok(v);
+            }
+        }
+    }
+
     Err(anyhow!(
-        "Could not find version in package.json or Cargo.toml"
+        "Could not find version in package.json, Cargo.toml, VERSION or git tags"
     ))
 }
 
@@ -199,6 +223,7 @@ fn update_files(v: &Version, base_path: Option<&Path>) -> Result<()> {
     let version_str = v.to_string();
     let pkg_json = base_path.map_or(PathBuf::from("package.json"), |p| p.join("package.json"));
     let cargo_toml = base_path.map_or(PathBuf::from("Cargo.toml"), |p| p.join("Cargo.toml"));
+    let version_file = base_path.map_or(PathBuf::from("VERSION"), |p| p.join("VERSION"));
 
     if pkg_json.exists() {
         let content = fs::read_to_string(&pkg_json)?;
@@ -211,16 +236,22 @@ fn update_files(v: &Version, base_path: Option<&Path>) -> Result<()> {
         let content = fs::read_to_string(&cargo_toml)?;
         let mut doc = content.parse::<DocumentMut>()?;
         if let Some(package) = doc.get_mut("package").and_then(|p| p.as_table_mut()) {
-            package.insert("version", value(version_str));
+            package.insert("version", value(version_str.clone()));
             fs::write(&cargo_toml, doc.to_string())?;
         }
+    }
+
+    if version_file.exists() {
+        fs::write(&version_file, format!("{}\n", version_str))?;
     }
 
     Ok(())
 }
 
-fn is_git_repo() -> bool {
-    Path::new(".git").exists()
+fn is_git_repo(base_path: Option<&Path>) -> bool {
+    base_path
+        .map_or(PathBuf::from(".git"), |p| p.join(".git"))
+        .exists()
 }
 
 fn git_tag_version(v: &Version, message: Option<String>) -> Result<()> {
@@ -230,8 +261,11 @@ fn git_tag_version(v: &Version, message: Option<String>) -> Result<()> {
     let files = [
         "package.json",
         "Cargo.toml",
+        "VERSION",
         "package-lock.json",
         "Cargo.lock",
+        "go.mod",
+        "go.sum",
     ];
     for file in files {
         if Path::new(file).exists() {
@@ -249,6 +283,7 @@ fn git_tag_version(v: &Version, message: Option<String>) -> Result<()> {
 
     Ok(())
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -363,4 +398,59 @@ version = "1.0.0"
 
         Ok(())
     }
+
+    #[test]
+    fn test_update_version_file() -> Result<()> {
+        let dir = tempdir()?;
+        let file_path = dir.path().join("VERSION");
+        fs::write(&file_path, "1.0.0")?;
+
+        let next_v = Version::parse("1.1.0")?;
+        update_files(&next_v, Some(dir.path()))?;
+
+        let content = fs::read_to_string(file_path)?;
+        assert_eq!(content.trim(), "1.1.0");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_current_version_git_fallback() -> Result<()> {
+        let dir = tempdir()?;
+        // Initialize git repo
+        Command::new("git")
+            .arg("init")
+            .current_dir(dir.path())
+            .output()?;
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(dir.path())
+            .output()?;
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(dir.path())
+            .output()?;
+
+        // Create a commit
+        fs::write(dir.path().join("file.txt"), "test")?;
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()?;
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(dir.path())
+            .output()?;
+
+        // Create a tag
+        Command::new("git")
+            .args(["tag", "v1.2.3"])
+            .current_dir(dir.path())
+            .output()?;
+
+        let v = get_current_version(Some(dir.path()))?;
+        assert_eq!(v.to_string(), "1.2.3");
+        Ok(())
+    }
 }
+

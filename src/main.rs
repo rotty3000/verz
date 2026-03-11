@@ -23,7 +23,13 @@ use toml_edit::{DocumentMut, value};
 
 #[derive(Parser)]
 #[command(name = "verz")]
-#[command(about = "A semver management tool similar to npm version", long_about = None)]
+#[command(
+    about = "A semver management tool similar to npm version", 
+    arg_required_else_help = true,
+    author,
+    long_about = None,
+    version,
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<VerzCommand>,
@@ -62,7 +68,12 @@ enum VerzCommand {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let current_version = get_current_version(None)?;
+    let current_version = if let Some(ver_str) = cli.newversion {
+        Version::parse(&ver_str).context("Invalid version string")?
+    } else {
+        get_current_version(None)?
+    };
+
     println!("v{}", current_version);
 
     let next_version = if let Some(cmd) = cli.command {
@@ -75,8 +86,6 @@ fn main() -> Result<()> {
             VerzCommand::Prepatch => increment_version(&current_version, "prepatch")?,
             VerzCommand::Prerelease => increment_version(&current_version, "prerelease")?,
         }
-    } else if let Some(ver_str) = cli.newversion {
-        Version::parse(&ver_str).context("Invalid version string")?
     } else {
         return Ok(());
     };

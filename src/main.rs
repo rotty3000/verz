@@ -24,7 +24,13 @@ use toml_edit::{DocumentMut, value};
 #[derive(Parser)]
 #[command(name = "verz")]
 #[command(
-    about = "A semver management tool similar to npm version", 
+    about = "A semver management tool similar to npm version",
+    after_help = r#"
+Written by Raymond Auge, © 2026. All rights reserved.
+
+Source/Issues: https://github.com/rotty3000/verz
+
+"#,
     arg_required_else_help = true,
     author,
     long_about = None,

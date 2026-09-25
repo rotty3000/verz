@@ -69,47 +69,12 @@ jobs:
       with:
         files: release-assets/*
         generate_release_notes: true
-    - name: Update Homebrew Formula
-      env:
-        HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-      run: |
-        TAG=${GITHUB_REF#refs/tags/}
-        VERSION=${TAG#v}
-
-        # Source (macOS)
-        SOURCE_URL="https://github.com/rotty3000/verz/archive/refs/tags/${TAG}.tar.gz"
-        curl -L -o verz-source.tar.gz "$SOURCE_URL"
-        SOURCE_SHA=$(sha256sum verz-source.tar.gz | awk '{print $1}')
-
-        # Linux AMD64
-        AMD64_URL="https://github.com/rotty3000/verz/releases/download/${TAG}/verz-linux-amd64"
-        AMD64_SHA=$(sha256sum dist/x86_64-unknown-linux-musl/verz | awk '{print $1}')
-
-        # Linux ARM64
-        ARM64_URL="https://github.com/rotty3000/verz/releases/download/${TAG}/verz-linux-arm64"
-        ARM64_SHA=$(sha256sum dist/aarch64-unknown-linux-musl/verz | awk '{print $1}')
-
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-        git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/rotty3000/homebrew-tap.git homebrew-tap
-        cd homebrew-tap
-
-        # Update Version
-        sed -i "s|version \".*\"|version \"$VERSION\"|" Formula/verz.rb
-
-        # Update Linux AMD64
-        perl -i -0777 -pe "s|(if Hardware::CPU.intel\?.*?sha256 \").*?(\".*?url \").*?(\")|\${1}$AMD64_SHA\${2}$AMD64_URL\${3}|s" Formula/verz.rb
-
-        # Update Linux ARM64
-        perl -i -0777 -pe "s|(elsif Hardware::CPU.arm\?.*?sha256 \").*?(\".*?url \").*?(\")|\${1}$ARM64_SHA\${2}$ARM64_URL\${3}|s" Formula/verz.rb
-
-        # Update macOS/Source
-        perl -i -0777 -pe "s|(on_macos.*?sha256 \").*?(\".*?url \").*?(\")|\${1}$SOURCE_SHA\${2}$SOURCE_URL\${3}|s" Formula/verz.rb
-
-        git add Formula/verz.rb
-        git commit -m "Update verz to $TAG"
-        git push
+    # NOTE: The Homebrew formula is updated by a self-hosted workflow in the
+    # rotty3000/homebrew-tap repo (.github/workflows/update-formula.yml), which
+    # polls this repo's public releases and bumps Formula/verz.rb using its own
+    # built-in GITHUB_TOKEN. That avoids the cross-repo PAT (HOMEBREW_TAP_TOKEN)
+    # this step used to require. For an instant bump after a release, run that
+    # workflow manually ("Run workflow") instead of waiting for its schedule.
 
   lint:
     name: Lint

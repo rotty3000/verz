@@ -14,7 +14,7 @@
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
-use semver::Version;
+use semver::{Prerelease, Version};
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -51,6 +51,22 @@ struct Cli {
     /// Commit message
     #[arg(short = 'm', long = "message")]
     message: Option<String>,
+
+    /// Append the short commit hash (git rev-parse --short HEAD) to the version
+    #[arg(long = "sh", global = true)]
+    sh: bool,
+
+    /// Append a custom suffix to the version (semver prerelease-safe). Combined
+    /// with --sh in the order the flags appear on the command line.
+    #[arg(long = "suffix", value_name = "VALUE", global = true)]
+    suffix: Option<String>,
+}
+
+/// A version-suffix piece contributed by --sh or --suffix, emitted in the
+/// order the flags appeared on the command line.
+enum SuffixPiece {
+    ShortHead,
+    Custom(String),
 }
 
 #[derive(Subcommand)]
@@ -74,15 +90,39 @@ enum VerzCommand {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let current_version = if let Some(ver_str) = cli.newversion {
-        Version::parse(&ver_str).context("Invalid version string")?
+    let current_version = if let Some(ver_str) = cli.newversion.as_deref() {
+        Version::parse(ver_str).context("Invalid version string")?
     } else {
         get_current_version(None)?
     };
 
     println!("v{}", current_version);
 
-    let next_version = if let Some(cmd) = cli.command {
+    // Collect the suffix pieces in the order the flags appeared on the command
+    // line. --sh/--suffix are global (accepted before or after a subcommand),
+    // so their relative order is read straight from argv rather than from
+    // clap's per-subcommand indices.
+    let argv: Vec<String> = std::env::args().collect();
+    let mut ordered: Vec<(usize, SuffixPiece)> = Vec::new();
+    if cli.sh {
+        let pos = argv.iter().position(|a| a == "--sh").unwrap_or(usize::MAX);
+        ordered.push((pos, SuffixPiece::ShortHead));
+    }
+    if let Some(suffix) = cli.suffix.clone() {
+        let pos = argv
+            .iter()
+            .position(|a| a == "--suffix" || a.starts_with("--suffix="))
+            .unwrap_or(usize::MAX);
+        ordered.push((pos, SuffixPiece::Custom(suffix)));
+    }
+    ordered.sort_by_key(|(i, _)| *i);
+
+    // With neither a subcommand nor a suffix flag there is nothing to do.
+    if cli.command.is_none() && ordered.is_empty() {
+        return Ok(());
+    }
+
+    let base_version = if let Some(cmd) = &cli.command {
         match cmd {
             VerzCommand::Major => increment_version(&current_version, "major")?,
             VerzCommand::Minor => increment_version(&current_version, "minor")?,
@@ -93,8 +133,17 @@ fn main() -> Result<()> {
             VerzCommand::Prerelease => increment_version(&current_version, "prerelease")?,
         }
     } else {
-        return Ok(());
+        current_version.clone()
     };
+
+    let mut extra: Vec<String> = Vec::new();
+    for (_, piece) in ordered {
+        match piece {
+            SuffixPiece::ShortHead => extra.push(short_head(None)?),
+            SuffixPiece::Custom(s) => extra.push(s),
+        }
+    }
+    let next_version = append_prerelease(&base_version, &extra)?;
 
     if next_version == current_version {
         return Ok(());
@@ -232,6 +281,46 @@ fn increment_version(v: &Version, level: &str) -> Result<Version> {
         _ => return Err(anyhow!("Unsupported increment level")),
     }
     Ok(next)
+}
+
+/// Append already-resolved identifiers (in command-line order) to `version`'s
+/// semver prerelease field, joined with `-`. Any existing prerelease is
+/// preserved and kept first. `Prerelease::new` validates the result, so an
+/// identifier with characters outside `[0-9A-Za-z-]` surfaces as an error.
+fn append_prerelease(version: &Version, extra: &[String]) -> Result<Version> {
+    if extra.is_empty() {
+        return Ok(version.clone());
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if !version.pre.is_empty() {
+        parts.push(version.pre.as_str().to_string());
+    }
+    parts.extend(extra.iter().cloned());
+    let mut next = version.clone();
+    next.pre =
+        Prerelease::new(&parts.join("-")).map_err(|e| anyhow!("invalid version suffix: {e}"))?;
+    Ok(next)
+}
+
+/// Resolve `git rev-parse --short HEAD` for the `--sh` flag.
+fn short_head(base_path: Option<&Path>) -> Result<String> {
+    let mut cmd = Command::new("git");
+    cmd.args(["rev-parse", "--short", "HEAD"]);
+    if let Some(p) = base_path {
+        cmd.current_dir(p);
+    }
+    let output = cmd.output().context("--sh: failed to run git")?;
+    if !output.status.success() {
+        return Err(anyhow!("--sh: not a git repository (or no commits yet)"));
+    }
+    let sha = String::from_utf8(output.stdout)
+        .context("--sh: git output was not valid UTF-8")?
+        .trim()
+        .to_string();
+    if sha.is_empty() {
+        return Err(anyhow!("--sh: git returned an empty short HEAD"));
+    }
+    Ok(sha)
 }
 
 fn update_files(v: &Version, base_path: Option<&Path>) -> Result<()> {
@@ -436,6 +525,66 @@ mod tests {
         let next = increment_version(&v, "major")?;
         assert_eq!(next.to_string(), "2.0.0");
         Ok(())
+    }
+
+    #[test]
+    fn test_append_prerelease_sh_only() -> Result<()> {
+        let v = Version::parse("0.63.0")?;
+        let next = append_prerelease(&v, &["d60e0ca1".to_string()])?;
+        assert_eq!(next.to_string(), "0.63.0-d60e0ca1");
+        Ok(())
+    }
+
+    #[test]
+    fn test_append_prerelease_suffix_only() -> Result<()> {
+        let v = Version::parse("0.63.0")?;
+        let next = append_prerelease(&v, &["runtime-debug".to_string()])?;
+        assert_eq!(next.to_string(), "0.63.0-runtime-debug");
+        Ok(())
+    }
+
+    #[test]
+    fn test_append_prerelease_sh_then_suffix() -> Result<()> {
+        let v = Version::parse("0.63.0")?;
+        let next = append_prerelease(&v, &["d60e0ca1".to_string(), "runtime-debug".to_string()])?;
+        assert_eq!(next.to_string(), "0.63.0-d60e0ca1-runtime-debug");
+        Ok(())
+    }
+
+    #[test]
+    fn test_append_prerelease_suffix_then_sh() -> Result<()> {
+        // Order is caller-controlled (command-line order); reversing the pieces
+        // reverses the output.
+        let v = Version::parse("0.63.0")?;
+        let next = append_prerelease(&v, &["runtime-debug".to_string(), "d60e0ca1".to_string()])?;
+        assert_eq!(next.to_string(), "0.63.0-runtime-debug-d60e0ca1");
+        Ok(())
+    }
+
+    #[test]
+    fn test_append_prerelease_onto_existing_pre() -> Result<()> {
+        // An existing prerelease (e.g. from `preminor`) is preserved and the
+        // new pieces are appended after it.
+        let v = Version::parse("0.63.0-0")?;
+        let next = append_prerelease(&v, &["d60e0ca1".to_string()])?;
+        assert_eq!(next.to_string(), "0.63.0-0-d60e0ca1");
+        Ok(())
+    }
+
+    #[test]
+    fn test_append_prerelease_empty_is_noop() -> Result<()> {
+        let v = Version::parse("1.2.3")?;
+        let next = append_prerelease(&v, &[])?;
+        assert_eq!(next.to_string(), "1.2.3");
+        Ok(())
+    }
+
+    #[test]
+    fn test_append_prerelease_rejects_invalid_suffix() {
+        // Underscore is not a valid semver prerelease character.
+        let v = Version::parse("1.2.3").unwrap();
+        let result = append_prerelease(&v, &["bad_suffix".to_string()]);
+        assert!(result.is_err());
     }
 
     #[test]

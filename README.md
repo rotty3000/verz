@@ -25,8 +25,29 @@ Arguments:
 Options:
   -n, --no-git-tag-version  Do not create a git commit and tag
   -m, --message <MESSAGE>   Commit message
+      --sh                  Append the short commit hash (git rev-parse --short HEAD) to the version
+      --suffix <VALUE>      Append a custom suffix to the version (semver prerelease-safe). Combined with --sh in the order the flags appear on the command line
   -h, --help                Print help
+  -V, --version             Print version
 ```
+
+## Version suffixes (`--sh` / `--suffix`)
+
+`--sh` appends the short commit hash and `--suffix <value>` appends a custom label. Both are attached to the semver prerelease field, joined with `-`, **in the order the flags appear on the command line**. They work on a bump or, on their own, to stamp the current version.
+
+```bash
+# on 0.63.0:
+verz minor --sh --suffix runtime-debug   # -> 0.64.0-d60e0ca1-runtime-debug
+verz minor --suffix runtime-debug --sh   # -> 0.64.0-runtime-debug-d60e0ca1  (order follows the command line)
+
+# no subcommand: stamp the current version
+verz --sh --suffix runtime-debug         # -> 0.63.0-d60e0ca1-runtime-debug
+
+# an existing prerelease is kept and appended after
+verz preminor --sh                       # 0.63.0 -> 0.64.0-0-d60e0ca1
+```
+
+Both flags are global, so they may appear before or after the subcommand. `--sh` requires a git repository with at least one commit.
 
 ## Installation
 
